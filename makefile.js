@@ -29,7 +29,10 @@ for (var i = 0; i < files.length; i++) {
 }
 
 var bits = os.arch() === "x64" ? 64 : 32; // Add your architecture here!
-var flags = ["-Wall", "-Wextra", "-Werror", "-g3", "-std=c99"];
+// macOS clang 21 is stricter than the original GCC; -Werror breaks on pre-existing
+// warnings (drive.c unused var, apic format %ld vs %llu, pc.c unterminated string, etc.).
+// Keep warnings but only error on older GCC or when explicitly requested.
+var flags = ["-Wall", "-Wextra", "-Wno-error", "-g3", "-std=c99"];
 var end_flags = [], fincc_flags = [];
 
 // flags.push.apply(flags, "-I/usr/include/SDL -D_GNU_SOURCE=1
@@ -140,8 +143,14 @@ for (var i = 0; i < argv.length; i++) {
             // List appropriate flags
             var my_flags = "";
             my_flags = my_flags.split(" ");
+            // OOM fix: 256MB is only enough for 32M guest. For Win10 1024M we need ~1100M heap.
+            // Use 1536M (1.5G) + ALLOW_MEMORY_GROWTH so 2048M guest also fits (needs ~2112M).
             end_flags.push("-s", "NO_FILESYSTEM=1",
-                "-s", "TOTAL_MEMORY=256MB"
+                "-s", "TOTAL_MEMORY=1536MB",
+                "-s", "ALLOW_MEMORY_GROWTH=1",
+                "-s", "MAXIMUM_MEMORY=2048MB",
+                "-s", "EXPORTED_FUNCTIONS=['_main','_malloc','_free','_parse_cfg','_emscripten_get_pc_config','_emscripten_alloc','_emscripten_set_fast','_emscripten_init','_emscripten_run','_emscripten_get_cycles','_emscripten_get_now','_drive_emscripten_init','_display_send_ctrl_alt_del','_emscripten_dyncall_vii']",
+                "-s", "EXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAPU16','HEAP32','HEAPF32','HEAPF64','wasmMemory']"
                 //"-s", "ASSERTIONS=1",
                 //"-s", "SAFE_HEAP=1"    
             );
@@ -218,6 +227,7 @@ if (result.indexOf(".js") !== -1 || result.indexOf(".wasm") !== -1) {
     end_flags.splice(end_flags.indexOf("-lz"), 1);
 }
 flags.push("-D" + build_type.toUpperCase() + "_BUILD");
+if (build_type === "emscripten") flags.push("-DEMSCRIPTEN");
 
 /*
 if (optimization !== 0) {

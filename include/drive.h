@@ -4,10 +4,11 @@
 #include "state.h"
 #include <stdint.h>
 
-#ifndef EMSCRIPTEN
+// Phase 6 fix: browser disk must support >4 GiB (Win10 16-20 GiB).
+// Original code disabled 64-bit offsets for EMSCRIPTEN, capping at 4 GiB.
+// Enable for both native and Emscripten; JS glue (libhalfix.js) is also patched
+// to use Number/BigInt arithmetic (Math.floor(offset/262144) not |0).
 #define ALLOW_64BIT_OFFSETS
-#endif
-
 #ifdef ALLOW_64BIT_OFFSETS
 typedef uint64_t drv_offset_t;
 #else
