@@ -85,10 +85,16 @@ struct drive_internal_info {
 };
 
 // Contained in each file directory as info.dat
+// Phase 6: JS glue was 32-bit bounded (|0, <<18 >>>0) capping at 4 GiB.
+// C struct was also 32-bit (uint32_t size). Widen to 64-bit for 20 GiB Win10.
+// On-disk info.dat is now always 12 bytes: { u32 size_low, u32 size_high, u32 block_size }
+// (packed, little-endian). Legacy 8-byte files (u32 size + u32 blksize) are
+// auto-upgraded by JS glue before calling drive_internal_init.
 struct drive_info_file {
-    uint32_t size;
+    uint32_t size_low;
+    uint32_t size_high;
     uint32_t block_size;
-};
+} __attribute__((packed));
 
 // ============================================================================
 // Path utilities
@@ -657,11 +663,23 @@ static
     UNUSED(drvid);
 #endif
 
-    // Parse
+    // Parse — handle 12-byte packed {lo,hi,blksz} (new) and 8-byte legacy
     struct drive_info_file* internal = info_dat;
-    drv->block_size = internal->block_size;
-    drv->size = internal->size;
-    drv->block_count = (internal->block_size + internal->size - 1) / internal->block_size;
+    uint64_t file_size = ((uint64_t)internal->size_high << 32) | internal->size_low;
+    // Heuristic for legacy 8-byte file where size_high is actually block_size:
+    // If file_size's high part looks like 0x00040000 (262144) and block_size is heap garbage,
+    // treat as legacy. More robust: JS now always pads to 12 bytes, so this branch is fallback.
+    if (internal->size_high == 262144 && internal->block_size != 262144 && internal->block_size != 0) {
+        // Likely legacy 8-byte: { size, block_size } where we misinterpreted block_size as size_high
+        file_size = internal->size_low;
+        drv->block_size = internal->size_high;
+    } else {
+        drv->block_size = internal->block_size;
+        // If file_size is 0 but size_low is plausible and high is 0, keep as is (covers new 12-byte small files)
+        if (file_size == 0 && internal->size_low != 0) file_size = internal->size_low;
+    }
+    drv->size = file_size;
+    drv->block_count = (drv->block_size + drv->size - 1) / drv->block_size;
     drv->blocks = calloc(sizeof(struct block_info), drv->block_count);
 
     info->data = drv;
@@ -670,8 +688,8 @@ static
     info->state = drive_internal_state;
     info->prefetch = drive_internal_prefetch;
 
-    // Now determine drive geometry
-    info->sectors = internal->size / 512;
+    // Now determine drive geometry (use 64-bit size)
+    info->sectors = (uint32_t)(drv->size / 512);
     info->sectors_per_cylinder = 63;
     info->heads = 16;
     info->cylinders_per_head = info->sectors / (info->sectors_per_cylinder * info->heads);

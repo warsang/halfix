@@ -131,8 +131,12 @@ void add_now(itick_t a)
 void util_debug(void)
 {
     display_release_mouse();
-#ifndef EMSCRIPTEN
+#if !defined(EMSCRIPTEN) && !defined(EMSCRIPTEN_BUILD)
+#if defined(__i386__) || defined(__x86_64__)
     __asm__("int3");
+#else
+    __builtin_trap();
+#endif
 #else
     printf("Breakpoint reached -- aborting\n");
     abort();

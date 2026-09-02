@@ -520,7 +520,9 @@
 
     global["drive_init"] = function (info_ptr, path, id) {
         var p = readstr(path), image;
-        if (p.indexOf("!") !== -1) {
+        if (p.indexOf("idb:") === 0) {
+            image = new IndexedDBImage(p.slice(4));
+        } else if (p.indexOf("!") !== -1) {
             var chunks = p.split("!");
             image = new image_backends[chunks[0]](_cache[parseInt(chunks[1]) | 0]);
         } else
@@ -746,11 +748,16 @@
      * @param {number} blksize 
      * @returns {Uint8Array} The data that would have been contained in info.dat
      */
-    function _construct_info(size, blksize) {
-        var i32 = new Int32Array(2);
-        i32[0] = size;
-        i32[1] = blksize;
-        return new Uint8Array(i32.buffer);
+     function _construct_info(size, blksize) {
+        // FIX Phase 6: Always emit 12-byte info.dat { u32 size_low, u32 size_high, u32 block_size }
+        // so patched C (drive.c packed struct) can read 64-bit sizes. Legacy 8-byte files
+        // fetched via XHR are padded to 12 in XHRImage.init before calling C.
+        var out = new Uint8Array(12);
+        var dv = new DataView(out.buffer);
+        dv.setUint32(0, size >>> 0, true); // low
+        dv.setUint32(4, Math.floor(size / 4294967296) >>> 0, true); // high
+        dv.setUint32(8, blksize >>> 0, true);
+        return out;
     }
 
     /**
@@ -770,9 +777,12 @@
     ArrayBufferImage.prototype.load = function (reqs, cb) {
         var data = [];
         for (var i = 0; i < reqs.length; i = i + 1 | 0) {
-            // note to self: Math.log(256*1024)/Math.log(2) === 18
-            var blockoffs = (_url_to_blkid(i) << 18) >>> 0;
-            data[i] = this.data.slice(blockoffs, (blockoffs + (256 << 10)) >>> 0);
+            // FIX Phase 6: widen 32-bit bounded (<<18 >>>0) to Number/BigInt.
+            // 20 GiB needs chunk 81920 → offset 0x500000000 (33 bits) which wraps with |0.
+            // Use multiplication so we stay in 53-bit safe Number range (1 TiB <2^50 still safe).
+            var blk = _url_to_blkid(reqs[i]);
+            var blockoffs = blk * (256 * 1024);
+            data[i] = this.data.slice(blockoffs, blockoffs + (256 * 1024));
         }
         setTimeout(function () {
             cb(null, data);
@@ -804,14 +814,16 @@
         var blocks = reqs.length;
 
         /** @type {File} */
-        var fileslice = this.file.slice((blockBase << 18) >>> 0, ((blockBase + blocks) << 18) >>> 0);
+        // FIX Phase 6: Number-safe multiplication instead of (<<18 >>>0) which caps at 4 GiB.
+        var CHUNK = 256 * 1024;
+        var fileslice = this.file.slice(blockBase * CHUNK, (blockBase + blocks) * CHUNK);
 
         var fr = new FileReader();
         fr.onload = function () {
             var arr = [];
             for (var i = 0; i < reqs.length; i = i + 1 | 0) {
-                // Slice a 256 KB chunk of the file
-                arr.push(new Uint8Array(fr.result.slice(i << 18, (i + 1) << 18)));
+                // Slice a 256 KB chunk of the file — use multiplication, not i<<18
+                arr.push(new Uint8Array(fr.result.slice(i * CHUNK, (i + 1) * CHUNK)));
             }
             cb(null, arr);
         };
@@ -844,13 +856,120 @@
     XHRImage.prototype.init = function (arg, cb) {
         loadFiles([join_path(arg, "info.dat")], function (err, data) {
             if (err) throw err;
-            cb(null, data[0]);
+            var info = data[0];
+            // FIX Phase 6: normalize legacy 8-byte info.dat to 12-byte {lo,hi,blksz}
+            if (info.length === 8) {
+                var out = new Uint8Array(12);
+                var dvOld = new DataView(info.buffer, info.byteOffset, 8);
+                var dvNew = new DataView(out.buffer);
+                var size = dvOld.getUint32(0, true);
+                var blksz = dvOld.getUint32(4, true);
+                dvNew.setUint32(0, size >>> 0, true);
+                dvNew.setUint32(4, 0, true); // high 0 for <4 GiB file
+                dvNew.setUint32(8, blksz >>> 0, true);
+                info = out;
+            }
+            cb(null, info);
         });
+    };
+
+    /**
+     * IndexedDB-backed image — reads 256 KiB chunks from disk.mjs store.
+     * Used so a 20 GiB win10.img ingested once survives tab reload without
+     * needing the original File handle (fixes “no File handle in this tab”).
+     * Keys are `halfix:chunk:<imageId>:<hex>` and `halfix:meta:<imageId>`
+     * as written by @kernelforge/halfix-lab/src/disk.mjs (idb-keyval,
+     * DB "keyval-store" / store "keyval").
+     * Path convention: "idb:<imageId>" e.g. "idb:halfix-win10"
+     * @constructor
+     * @param {string} imageId
+     * @extends HardDriveImage
+     */
+    function IndexedDBImage(imageId) {
+        this.imageId = imageId || "halfix-win10";
+    }
+    IndexedDBImage.prototype = new HardDriveImage();
+    // Helper: open idb-keyval DB and get a key
+    IndexedDBImage.prototype._getKey = function (key, cb) {
+        try {
+            var req = indexedDB.open("keyval-store");
+            req.onsuccess = function () {
+                var db = req.result;
+                try {
+                    var tx = db.transaction("keyval", "readonly");
+                    var store = tx.objectStore("keyval");
+                    var g = store.get(key);
+                    g.onsuccess = function () { cb(null, g.result); try { db.close(); } catch (_) {} };
+                    g.onerror = function () { try { db.close(); } catch (_) {} cb(g.error, null); };
+                } catch (e) { try { db.close(); } catch (_) {} cb(e, null); }
+            };
+            req.onerror = function () { cb(req.error, null); };
+        } catch (e) { cb(e, null); }
+    };
+    IndexedDBImage.prototype.init = function (arg, cb) {
+        // arg is "idb:halfix-win10" — we ignore it and use this.imageId
+        var self = this;
+        // Try to read meta for this imageId to get size
+        var metaKey = "halfix:meta:" + self.imageId;
+        self._getKey(metaKey, function (err, meta) {
+            if (!err && meta && typeof meta.size === "number") {
+                var data = _construct_info(meta.size, meta.chunkSize || (256 * 1024));
+                cb(null, data);
+                return;
+            }
+            // Fallback: try to read info.dat via XHR (for chunked dir fallback)
+            loadFiles([join_path(arg, "info.dat")], function (err2, data) {
+                if (err2) { cb(err2, null); return; }
+                var info = data[0];
+                if (info.length === 8) {
+                    var out = new Uint8Array(12);
+                    var dvOld = new DataView(info.buffer, info.byteOffset, 8);
+                    var dvNew = new DataView(out.buffer);
+                    var size = dvOld.getUint32(0, true);
+                    var blksz = dvOld.getUint32(4, true);
+                    dvNew.setUint32(0, size >>> 0, true);
+                    dvNew.setUint32(4, 0, true);
+                    dvNew.setUint32(8, blksz >>> 0, true);
+                    info = out;
+                }
+                cb(null, info);
+            });
+        });
+    };
+    IndexedDBImage.prototype.load = function (reqs, cb) {
+        var self = this;
+        var out = new Array(reqs.length);
+        var pending = reqs.length;
+        var failed = null;
+        if (pending === 0) return cb(null, out);
+        for (var i = 0; i < reqs.length; i++) {
+            (function (idx) {
+                var blk = _url_to_blkid(reqs[idx]);
+                var key = "halfix:chunk:" + self.imageId + ":" + ("00000000" + blk.toString(16)).slice(-8);
+                self._getKey(key, function (err, chunk) {
+                    if (err) failed = err;
+                    // chunk is Uint8Array or undefined (sparse hole -> zeros)
+                    if (chunk && chunk instanceof Uint8Array) {
+                        out[idx] = chunk;
+                    } else if (chunk && chunk.buffer) {
+                        out[idx] = new Uint8Array(chunk);
+                    } else {
+                        // sparse: return zero-filled 256 KiB
+                        out[idx] = new Uint8Array(256 * 1024);
+                    }
+                    if (--pending === 0) {
+                        if (failed) cb(failed, null);
+                        else cb(null, out);
+                    }
+                });
+            })(i);
+        }
     };
 
     var image_backends = {
         "file": FileImage,
-        "ab": ArrayBufferImage
+        "ab": ArrayBufferImage,
+        "idb": IndexedDBImage
     };
 
     // ========================================================================
@@ -864,7 +983,14 @@
      * @return {number} Address
      */
     function alloc(size) {
-        var n = Module["_malloc"](size);
+        var m = Module["_malloc"] || Module._malloc || (typeof wasmExports !== "undefined" && wasmExports._malloc) || (typeof Module.asm !== "undefined" && Module.asm._malloc);
+        if (!m) {
+            // Fallback: try to get from global Module or window.Module
+            var g = (typeof window !== "undefined" && window.Module) || (typeof globalThis !== "undefined" && globalThis.Module);
+            m = g && (g["_malloc"] || g._malloc);
+        }
+        if (!m) throw new Error("Module._malloc not available — halfix.wasm not yet instantiated (check COEP/CORP and WASM headers)");
+        var n = m(size);
         _allocs.push(n);
         return n;
     }

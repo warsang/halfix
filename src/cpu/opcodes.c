@@ -622,9 +622,13 @@ OPTYPE op_int(struct decoded_instruction* i)
 OPTYPE op_into(struct decoded_instruction* i)
 {
 #if 1
-#ifndef EMSCRIPTEN
+#if !defined(EMSCRIPTEN) && !defined(EMSCRIPTEN_BUILD)
+#if defined(__i386__) || defined(__x86_64__)
     __asm__("int3");
     NEXT2(i->flags);
+#else
+    __builtin_trap();
+#endif
 #endif
 #endif
     if (cpu_get_of()) {
