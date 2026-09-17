@@ -126,7 +126,7 @@ static void drive_get_path(char* dest, char* pathbase, uint32_t x)
 
 // Reads block information from a file.
 // Called by drive_internal_read_check
-static int drive_read_block_internal(struct drive_internal_info* this, struct block_info* info, void* buffer, uint32_t length, uint32_t position)
+static int drive_read_block_internal(struct drive_internal_info* this, struct block_info* info, void* buffer, uint32_t length, drv_offset_t position)
 {
     uint32_t blockoffs = position % this->block_size;
 #ifdef EMSCRIPTEN
@@ -135,7 +135,7 @@ static int drive_read_block_internal(struct drive_internal_info* this, struct bl
         /* id, buffer, offset, length */
         return window["drives"][$0]["readCache"]($1, $2, $3, $4) | 0;
     },
-        this->drive_id, position / this->block_size, buffer, blockoffs, length);
+        this->drive_id, (uint32_t)(position / this->block_size), buffer, blockoffs, length);
 #else
     memcpy(buffer, info->data + blockoffs, length);
     return 0;
@@ -203,10 +203,10 @@ static void* drive_read_file(struct drive_internal_info* this, char* fn)
 #endif
 
 // Read data from remote source (i.e. file, web server, etc.)
-static int drive_internal_read_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, uint32_t pos, uint32_t length)
+static int drive_internal_read_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, drv_offset_t pos, uint32_t length)
 {
     char temp[1024];
-    uint32_t block = pos / this->block_size;
+    uint32_t block = (uint32_t)(pos / this->block_size);
     drive_get_path(temp, this->paths[blockinfo->pathindex], block);
 #ifdef EMSCRIPTEN
     // Mark the block cache entry as valid
@@ -235,12 +235,12 @@ static int drive_internal_read_remote(struct drive_internal_info* this, struct b
 }
 
 // This function loads blocks from the cache. Returns 0 if all blocks were read from the cache.
-static int drive_internal_read_check(struct drive_internal_info* this, void* buffer, uint32_t length, drv_offset_t position, int no_xhr)
+static int drive_internal_read_check(struct drive_internal_info* this, void* buffer,     uint32_t length, drv_offset_t position, int no_xhr)
 {
-    uint32_t readEnd = position + length,
+    drv_offset_t readEnd = position + length,
              blocksToRead = ((((readEnd - 1) & ~BLOCK_MASK) - (position & ~BLOCK_MASK)) >> BLOCK_SHIFT) + 1;
 
-    uint32_t currentFilePosition = position;
+    drv_offset_t currentFilePosition = position;
 
     int retval = 0;
 
@@ -324,10 +324,10 @@ static int drive_internal_read(void* this_ptr, void* cb_ptr, void* buffer, uint3
 // ============================================================================
 
 // Read data from remote source (i.e. file, web server, etc.)
-static int drive_internal_write_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, uint32_t pos, drv_offset_t length)
+static int drive_internal_write_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, drv_offset_t pos, drv_offset_t length)
 {
     char temp[1024];
-    uint32_t block = pos / this->block_size;
+    uint32_t block = (uint32_t)(pos / this->block_size);
     drive_get_path(temp, this->paths[blockinfo->pathindex], block);
 #ifdef EMSCRIPTEN
     // We have to read the block in order for it to be valid
@@ -366,7 +366,7 @@ static int drive_write_block_internal(struct drive_internal_info* this, struct b
         /* id, buffer, offset, length */
         return window["drives"][$0]["writeCache"]($1, $2, $3, $4);
     },
-        this->drive_id, position / this->block_size, buffer, blockoffs, length);
+        this->drive_id, (uint32_t)(position / this->block_size), buffer, blockoffs, length);
 #else
     memcpy(info->data + blockoffs, buffer, length);
     return 0;
@@ -378,7 +378,7 @@ static int drive_internal_write_check(struct drive_internal_info* this, void* bu
     drv_offset_t writeEnd = position + length,
                  blocksToWrite = ((((writeEnd - 1) & ~BLOCK_MASK) - (position & ~BLOCK_MASK)) >> BLOCK_SHIFT) + 1;
 
-    uint32_t currentFilePosition = position;
+    drv_offset_t currentFilePosition = position;
 
     int retval = 0;
 
@@ -469,10 +469,10 @@ static void drive_internal_prefetch_cb(void* this_ptr, int status)
 #endif
 
 // Read data from remote source (i.e. file, web server, etc.)
-static int drive_internal_prefetch_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint32_t pos, drv_offset_t length)
+static int drive_internal_prefetch_remote(struct drive_internal_info* this, struct block_info* blockinfo, drv_offset_t pos, drv_offset_t length)
 {
     char temp[1024];
-    uint32_t block = pos / this->block_size;
+    uint32_t block = (uint32_t)(pos / this->block_size);
     drive_get_path(temp, this->paths[blockinfo->pathindex], block);
 #ifdef EMSCRIPTEN
     // Mark the block cache entry as valid
@@ -499,7 +499,7 @@ static int drive_internal_prefetch_check(struct drive_internal_info* this, uint3
     drv_offset_t readEnd = position + length,
                  blocksToRead = ((((readEnd - 1) & ~BLOCK_MASK) - (position & ~BLOCK_MASK)) >> BLOCK_SHIFT) + 1;
 
-    uint32_t currentFilePosition = position;
+    drv_offset_t currentFilePosition = position;
 
     int retval = 0;
     for (unsigned int i = 0; i < blocksToRead; i++) {
@@ -532,8 +532,6 @@ static int drive_internal_prefetch_check(struct drive_internal_info* this, uint3
 }
 static int drive_internal_prefetch(void* this_ptr, void* cb_ptr, uint32_t length, drv_offset_t position, drive_cb cb)
 {
-    if (position > 0xFFFFFFFF)
-        DRIVE_FATAL("TODO: big access\n");
     struct drive_internal_info* this = this_ptr;
     if (!drive_internal_prefetch_check(this, length, position))
         return DRIVE_RESULT_SYNC;
