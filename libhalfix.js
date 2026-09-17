@@ -747,10 +747,13 @@
      * @returns {Uint8Array} The data that would have been contained in info.dat
      */
     function _construct_info(size, blksize) {
-        var i32 = new Int32Array(2);
-        i32[0] = size;
-        i32[1] = blksize;
-        return new Uint8Array(i32.buffer);
+        // 12-byte info.dat { size_low, size_high, block_size }.
+        var out = new Uint8Array(12);
+        var dv = new DataView(out.buffer);
+        dv.setUint32(0, size >>> 0, true); // low
+        dv.setUint32(4, Math.floor(size / 4294967296) >>> 0, true); // high
+        dv.setUint32(8, blksize >>> 0, true);
+        return out;
     }
 
     /**
@@ -770,9 +773,10 @@
     ArrayBufferImage.prototype.load = function (reqs, cb) {
         var data = [];
         for (var i = 0; i < reqs.length; i = i + 1 | 0) {
-            // note to self: Math.log(256*1024)/Math.log(2) === 18
-            var blockoffs = (_url_to_blkid(i) << 18) >>> 0;
-            data[i] = this.data.slice(blockoffs, (blockoffs + (256 << 10)) >>> 0);
+            // Use multiplication; <<18 wraps above 4 GiB.
+            var blk = _url_to_blkid(reqs[i]);
+            var blockoffs = blk * (256 * 1024);
+            data[i] = this.data.slice(blockoffs, blockoffs + (256 * 1024));
         }
         setTimeout(function () {
             cb(null, data);
@@ -804,14 +808,14 @@
         var blocks = reqs.length;
 
         /** @type {File} */
-        var fileslice = this.file.slice((blockBase << 18) >>> 0, ((blockBase + blocks) << 18) >>> 0);
+        var CHUNK = 256 * 1024;
+        var fileslice = this.file.slice(blockBase * CHUNK, (blockBase + blocks) * CHUNK);
 
         var fr = new FileReader();
         fr.onload = function () {
             var arr = [];
             for (var i = 0; i < reqs.length; i = i + 1 | 0) {
-                // Slice a 256 KB chunk of the file
-                arr.push(new Uint8Array(fr.result.slice(i << 18, (i + 1) << 18)));
+                arr.push(new Uint8Array(fr.result.slice(i * CHUNK, (i + 1) * CHUNK)));
             }
             cb(null, arr);
         };
@@ -844,7 +848,20 @@
     XHRImage.prototype.init = function (arg, cb) {
         loadFiles([join_path(arg, "info.dat")], function (err, data) {
             if (err) throw err;
-            cb(null, data[0]);
+            var info = data[0];
+            // Normalize legacy 8-byte info.dat to 12-byte form.
+            if (info.length === 8) {
+                var out = new Uint8Array(12);
+                var dvOld = new DataView(info.buffer, info.byteOffset, 8);
+                var dvNew = new DataView(out.buffer);
+                var size = dvOld.getUint32(0, true);
+                var blksz = dvOld.getUint32(4, true);
+                dvNew.setUint32(0, size >>> 0, true);
+                dvNew.setUint32(4, 0, true); // high 0 for <4 GiB file
+                dvNew.setUint32(8, blksz >>> 0, true);
+                info = out;
+            }
+            cb(null, info);
         });
     };
 
