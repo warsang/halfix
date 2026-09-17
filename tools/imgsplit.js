@@ -62,7 +62,13 @@ var options = {
 fs.writeFileSync(path.join(dir, "info.json"), JSON.stringify(options));
 
 // Now write it in a binary format so that we don't have to parse the JSON. 
-var i32 = new Int32Array(2);
-i32[0] = size;
-i32[1] = block_size;
-fs.writeFileSync(path.join(dir, "info.dat"), new Buffer(i32.buffer));
+// 12-byte info.dat { size_low, size_high, block_size }.
+var out12 = new Uint8Array(12);
+var dv12 = new DataView(out12.buffer);
+dv12.setUint32(0, size >>> 0, true);
+dv12.setUint32(4, Math.floor(size / 4294967296) >>> 0, true);
+dv12.setUint32(8, block_size >>> 0, true);
+fs.writeFileSync(path.join(dir, "info.dat"), Buffer.from(out12.buffer));
+if (size > 0xFFFFFFFF) {
+    console.log(`[imgsplit] >4 GiB image (${(size/1024/1024/1024).toFixed(2)} GiB) — info.dat 12-byte (u64+u32)`);
+}
