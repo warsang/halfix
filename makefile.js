@@ -140,8 +140,13 @@ for (var i = 0; i < argv.length; i++) {
             // List appropriate flags
             var my_flags = "";
             my_flags = my_flags.split(" ");
+            // A 1024M guest needs its RAM plus emulator overhead in the
+            // WASM heap: native boot peaked ~289MB RSS over guest RAM.
+            // 1536M covers 1024M guest + overhead + margin; growth allowed.
             end_flags.push("-s", "NO_FILESYSTEM=1",
-                "-s", "TOTAL_MEMORY=256MB"
+                "-s", "TOTAL_MEMORY=1536MB",
+                "-s", "ALLOW_MEMORY_GROWTH=1",
+                "-s", "MAXIMUM_MEMORY=2048MB"
                 //"-s", "ASSERTIONS=1",
                 //"-s", "SAFE_HEAP=1"    
             );
