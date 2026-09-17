@@ -973,12 +973,7 @@ void vga_update(void)
     vga.framebuffer = display_get_pixels();
 #endif
 
-    uint32_t
-        //current = vga.current_scanline,
-        total_scanlines_drawn
-        = 0;
     while (scanlines_to_update--) {
-        total_scanlines_drawn++;
         // Things to account for here
         //  - Doubling Scanlines
         //  - Character Scanlines
@@ -1236,8 +1231,6 @@ void vga_update(void)
 
             vga_complete_redraw(); // contrary to its name, it only resets drawing state
             //current = 0;
-
-            total_scanlines_drawn = 0;
 
             // also, one frame has been completely drawn
             //framectr = (framectr + 1) & 0x3F;
