@@ -84,11 +84,12 @@ struct drive_internal_info {
     struct block_info* blocks;
 };
 
-// Contained in each file directory as info.dat
+// info.dat is 12 bytes: { u32 size_low, u32 size_high, u32 block_size }.
 struct drive_info_file {
-    uint32_t size;
+    uint32_t size_low;
+    uint32_t size_high;
     uint32_t block_size;
-};
+} __attribute__((packed));
 
 // ============================================================================
 // Path utilities
@@ -574,12 +575,10 @@ static void drive_internal_state(void* this_ptr, char* pn)
         for (int i = 0; i < old_path_counts; i++)
             free(this->paths[i]);
         this->paths = realloc(this->paths, this->path_count * sizeof(char*));
-        int paths0 = 0;
         for (unsigned int i = 0; i < this->path_count; i++) {
             sprintf(temp, "path%d", i);
             state_string(obj, temp, &this->paths[i]);
             printf("%s\n", this->paths[i]);
-            paths0++;
         }
 
         // Destroy all blocks
@@ -657,11 +656,12 @@ static
     UNUSED(drvid);
 #endif
 
-    // Parse
+    // Parse canonical 12-byte {lo,hi,blksz}.
     struct drive_info_file* internal = info_dat;
+    uint64_t file_size = ((uint64_t)internal->size_high << 32) | internal->size_low;
     drv->block_size = internal->block_size;
-    drv->size = internal->size;
-    drv->block_count = (internal->block_size + internal->size - 1) / internal->block_size;
+    drv->size = file_size;
+    drv->block_count = (drv->block_size + drv->size - 1) / drv->block_size;
     drv->blocks = calloc(sizeof(struct block_info), drv->block_count);
 
     info->data = drv;
@@ -670,8 +670,8 @@ static
     info->state = drive_internal_state;
     info->prefetch = drive_internal_prefetch;
 
-    // Now determine drive geometry
-    info->sectors = internal->size / 512;
+    // Now determine drive geometry.
+    info->sectors = (uint32_t)(drv->size / 512);
     info->sectors_per_cylinder = 63;
     info->heads = 16;
     info->cylinders_per_head = info->sectors / (info->sectors_per_cylinder * info->heads);
@@ -722,10 +722,18 @@ int drive_init(struct drive_info* info, char* filename)
         return -1;
     int size = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
-    void* data = malloc(size);
+    void* data = malloc(size == 8 ? 12 : size);
     if (read(fd, data, size) != size)
         return -1;
     close(fd);
+
+    // Normalize legacy 8-byte info.dat to 12-byte canonical form.
+    if (size == 8) {
+        uint32_t lo = ((uint32_t*)data)[0], blksz = ((uint32_t*)data)[1];
+        ((uint32_t*)data)[0] = lo;
+        ((uint32_t*)data)[1] = 0;
+        ((uint32_t*)data)[2] = blksz;
+    }
 
     drive_internal_init(info, filename, data, -1);
     free(data);

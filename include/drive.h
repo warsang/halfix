@@ -4,10 +4,8 @@
 #include "state.h"
 #include <stdint.h>
 
-#ifndef EMSCRIPTEN
+// 64-bit offsets for >4 GiB images.
 #define ALLOW_64BIT_OFFSETS
-#endif
-
 #ifdef ALLOW_64BIT_OFFSETS
 typedef uint64_t drv_offset_t;
 #else
