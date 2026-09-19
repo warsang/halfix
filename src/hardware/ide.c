@@ -571,13 +571,13 @@ static void ide_atapi_read_complete(void* thisptr, int x)
 static void ide_atapi_read(struct ide_controller* ctrl)
 {
     IDE_LOG("   atapi read sector=%d\n", ctrl->atapi_lba);
-    // XXX -- make sure that ctrl->atapi_lba * ctrl->atapi_sector_size can be over 0xFFFFFFFF
-    int res = drive_read(SELECTED(ctrl, info), ctrl, ctrl->pio_buffer, ctrl->atapi_sector_size, ctrl->atapi_lba * ctrl->atapi_sector_size, ide_atapi_read_complete);
+    // LBA * sector size exceeds 32 bits past 4 GiB; widen before multiply.
+    int res = drive_read(SELECTED(ctrl, info), ctrl, ctrl->pio_buffer, ctrl->atapi_sector_size, (drv_offset_t)ctrl->atapi_lba * ctrl->atapi_sector_size, ide_atapi_read_complete);
 
     // We have already prefetched this data
     if (res != DRIVE_RESULT_SYNC) {
         printf(" == Internal IDE inconsistency == ");
-        printf("Fetch offset: %08x [blk%08x.bin]\n", ctrl->atapi_lba * ctrl->atapi_sector_size, (ctrl->atapi_lba * ctrl->atapi_sector_size) / (256 << 10));
+        printf("Fetch offset: %llx [blk%08x.bin]\n", (unsigned long long)ctrl->atapi_lba * ctrl->atapi_sector_size, (uint32_t)(((drv_offset_t)ctrl->atapi_lba * ctrl->atapi_sector_size) / (256 << 10)));
         printf("Fetch bytes: %d\n", ctrl->atapi_sector_size);
         IDE_FATAL("Error trying to fetch already-fetched ATAPI data\n");
     }
@@ -885,7 +885,7 @@ static void ide_atapi_run_command(struct ide_controller* ctrl)
             // Prefetch all the data beforehand
             IDE_LOG("Prefetch: %d start=%08x end=%08x\n", ctrl->atapi_cylinder_count, ctrl->atapi_lba * ctrl->atapi_sector_size, ctrl->atapi_lba * ctrl->atapi_sector_size + ctrl->atapi_bytes_to_transfer);
             //fprintf(stderr, "cylinder bytes=%d [0x%x] offs=%08x [blk%08x.bin] real bytes=0x%x\n", ctrl->atapi_cylinder_count, ctrl->atapi_cylinder_count, ctrl->atapi_lba * ctrl->atapi_sector_size, (ctrl->atapi_lba * ctrl->atapi_sector_size) / (256 * 1024), ctrl->atapi_bytes_to_transfer);
-            int res = drive_prefetch(SELECTED(ctrl, info), ctrl, ctrl->atapi_bytes_to_transfer, ctrl->atapi_lba * ctrl->atapi_sector_size, ide_atapi_read_cb);
+            int res = drive_prefetch(SELECTED(ctrl, info), ctrl, ctrl->atapi_bytes_to_transfer, (drv_offset_t)ctrl->atapi_lba * ctrl->atapi_sector_size, ide_atapi_read_cb);
             if (res == DRIVE_RESULT_ASYNC) {
                 ctrl->status |= ATA_STATUS_BSY | ATA_STATUS_DRDY | ATA_STATUS_DSC;
             } else if (res == DRIVE_RESULT_SYNC) {
@@ -1049,12 +1049,12 @@ static void ide_pio_read_callback(struct ide_controller* ctrl)
             } else {
                 IDE_LOG("Reading sector %d - %d left - frame %d/%d [res: %d], sectsize=%d\n", ctrl->atapi_lba, ctrl->atapi_sectors_to_read, ctrl->atapi_frame_bytes_transferred, ctrl->atapi_frame_bytes_to_transfer, -(ctrl->atapi_frame_bytes_transferred - ctrl->atapi_frame_bytes_to_transfer), ctrl->atapi_sector_size);
                 // Reload, but don't reset anything.
-                int res = drive_read(SELECTED(ctrl, info), ctrl, ctrl->pio_buffer, ctrl->atapi_sector_size, ctrl->atapi_lba * ctrl->atapi_sector_size, ide_atapi_read_complete);
+                int res = drive_read(SELECTED(ctrl, info), ctrl, ctrl->pio_buffer, ctrl->atapi_sector_size, (drv_offset_t)ctrl->atapi_lba * ctrl->atapi_sector_size, ide_atapi_read_complete);
 
                 // We have already prefetched this data
                 if (res != DRIVE_RESULT_SYNC) {
                     fprintf(stderr, " == Internal IDE inconsistency == ");
-                    fprintf(stderr, "Fetch offset: %08x [blk%08x.bin]\n", ctrl->atapi_lba * ctrl->atapi_sector_size, (ctrl->atapi_lba * ctrl->atapi_sector_size) / (256 << 10));
+                    fprintf(stderr, "Fetch offset: %llx [blk%08x.bin]\n", (unsigned long long)ctrl->atapi_lba * ctrl->atapi_sector_size, (uint32_t)(((drv_offset_t)ctrl->atapi_lba * ctrl->atapi_sector_size) / (256 << 10)));
                     fprintf(stderr, "Fetch bytes: %d\n", ctrl->atapi_sector_size);
                     IDE_FATAL("Error trying to fetch already-fetched ATAPI data\n");
                 }

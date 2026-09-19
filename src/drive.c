@@ -84,11 +84,12 @@ struct drive_internal_info {
     struct block_info* blocks;
 };
 
-// Contained in each file directory as info.dat
+// info.dat is 12 bytes: { u32 size_low, u32 size_high, u32 block_size }.
 struct drive_info_file {
-    uint32_t size;
+    uint32_t size_low;
+    uint32_t size_high;
     uint32_t block_size;
-};
+} __attribute__((packed));
 
 // ============================================================================
 // Path utilities
@@ -125,7 +126,7 @@ static void drive_get_path(char* dest, char* pathbase, uint32_t x)
 
 // Reads block information from a file.
 // Called by drive_internal_read_check
-static int drive_read_block_internal(struct drive_internal_info* this, struct block_info* info, void* buffer, uint32_t length, uint32_t position)
+static int drive_read_block_internal(struct drive_internal_info* this, struct block_info* info, void* buffer, uint32_t length, drv_offset_t position)
 {
     uint32_t blockoffs = position % this->block_size;
 #ifdef EMSCRIPTEN
@@ -134,7 +135,7 @@ static int drive_read_block_internal(struct drive_internal_info* this, struct bl
         /* id, buffer, offset, length */
         return window["drives"][$0]["readCache"]($1, $2, $3, $4) | 0;
     },
-        this->drive_id, position / this->block_size, buffer, blockoffs, length);
+        this->drive_id, (uint32_t)(position / this->block_size), buffer, blockoffs, length);
 #else
     memcpy(buffer, info->data + blockoffs, length);
     return 0;
@@ -202,10 +203,10 @@ static void* drive_read_file(struct drive_internal_info* this, char* fn)
 #endif
 
 // Read data from remote source (i.e. file, web server, etc.)
-static int drive_internal_read_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, uint32_t pos, uint32_t length)
+static int drive_internal_read_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, drv_offset_t pos, uint32_t length)
 {
     char temp[1024];
-    uint32_t block = pos / this->block_size;
+    uint32_t block = (uint32_t)(pos / this->block_size);
     drive_get_path(temp, this->paths[blockinfo->pathindex], block);
 #ifdef EMSCRIPTEN
     // Mark the block cache entry as valid
@@ -234,12 +235,12 @@ static int drive_internal_read_remote(struct drive_internal_info* this, struct b
 }
 
 // This function loads blocks from the cache. Returns 0 if all blocks were read from the cache.
-static int drive_internal_read_check(struct drive_internal_info* this, void* buffer, uint32_t length, drv_offset_t position, int no_xhr)
+static int drive_internal_read_check(struct drive_internal_info* this, void* buffer,     uint32_t length, drv_offset_t position, int no_xhr)
 {
-    uint32_t readEnd = position + length,
+    drv_offset_t readEnd = position + length,
              blocksToRead = ((((readEnd - 1) & ~BLOCK_MASK) - (position & ~BLOCK_MASK)) >> BLOCK_SHIFT) + 1;
 
-    uint32_t currentFilePosition = position;
+    drv_offset_t currentFilePosition = position;
 
     int retval = 0;
 
@@ -323,10 +324,10 @@ static int drive_internal_read(void* this_ptr, void* cb_ptr, void* buffer, uint3
 // ============================================================================
 
 // Read data from remote source (i.e. file, web server, etc.)
-static int drive_internal_write_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, uint32_t pos, drv_offset_t length)
+static int drive_internal_write_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint8_t* buffer, drv_offset_t pos, drv_offset_t length)
 {
     char temp[1024];
-    uint32_t block = pos / this->block_size;
+    uint32_t block = (uint32_t)(pos / this->block_size);
     drive_get_path(temp, this->paths[blockinfo->pathindex], block);
 #ifdef EMSCRIPTEN
     // We have to read the block in order for it to be valid
@@ -365,7 +366,7 @@ static int drive_write_block_internal(struct drive_internal_info* this, struct b
         /* id, buffer, offset, length */
         return window["drives"][$0]["writeCache"]($1, $2, $3, $4);
     },
-        this->drive_id, position / this->block_size, buffer, blockoffs, length);
+        this->drive_id, (uint32_t)(position / this->block_size), buffer, blockoffs, length);
 #else
     memcpy(info->data + blockoffs, buffer, length);
     return 0;
@@ -377,7 +378,7 @@ static int drive_internal_write_check(struct drive_internal_info* this, void* bu
     drv_offset_t writeEnd = position + length,
                  blocksToWrite = ((((writeEnd - 1) & ~BLOCK_MASK) - (position & ~BLOCK_MASK)) >> BLOCK_SHIFT) + 1;
 
-    uint32_t currentFilePosition = position;
+    drv_offset_t currentFilePosition = position;
 
     int retval = 0;
 
@@ -468,10 +469,10 @@ static void drive_internal_prefetch_cb(void* this_ptr, int status)
 #endif
 
 // Read data from remote source (i.e. file, web server, etc.)
-static int drive_internal_prefetch_remote(struct drive_internal_info* this, struct block_info* blockinfo, uint32_t pos, drv_offset_t length)
+static int drive_internal_prefetch_remote(struct drive_internal_info* this, struct block_info* blockinfo, drv_offset_t pos, drv_offset_t length)
 {
     char temp[1024];
-    uint32_t block = pos / this->block_size;
+    uint32_t block = (uint32_t)(pos / this->block_size);
     drive_get_path(temp, this->paths[blockinfo->pathindex], block);
 #ifdef EMSCRIPTEN
     // Mark the block cache entry as valid
@@ -498,7 +499,7 @@ static int drive_internal_prefetch_check(struct drive_internal_info* this, uint3
     drv_offset_t readEnd = position + length,
                  blocksToRead = ((((readEnd - 1) & ~BLOCK_MASK) - (position & ~BLOCK_MASK)) >> BLOCK_SHIFT) + 1;
 
-    uint32_t currentFilePosition = position;
+    drv_offset_t currentFilePosition = position;
 
     int retval = 0;
     for (unsigned int i = 0; i < blocksToRead; i++) {
@@ -531,8 +532,6 @@ static int drive_internal_prefetch_check(struct drive_internal_info* this, uint3
 }
 static int drive_internal_prefetch(void* this_ptr, void* cb_ptr, uint32_t length, drv_offset_t position, drive_cb cb)
 {
-    if (position > 0xFFFFFFFF)
-        DRIVE_FATAL("TODO: big access\n");
     struct drive_internal_info* this = this_ptr;
     if (!drive_internal_prefetch_check(this, length, position))
         return DRIVE_RESULT_SYNC;
@@ -574,12 +573,10 @@ static void drive_internal_state(void* this_ptr, char* pn)
         for (int i = 0; i < old_path_counts; i++)
             free(this->paths[i]);
         this->paths = realloc(this->paths, this->path_count * sizeof(char*));
-        int paths0 = 0;
         for (unsigned int i = 0; i < this->path_count; i++) {
             sprintf(temp, "path%d", i);
             state_string(obj, temp, &this->paths[i]);
             printf("%s\n", this->paths[i]);
-            paths0++;
         }
 
         // Destroy all blocks
@@ -657,11 +654,12 @@ static
     UNUSED(drvid);
 #endif
 
-    // Parse
+    // Parse canonical 12-byte {lo,hi,blksz}.
     struct drive_info_file* internal = info_dat;
+    uint64_t file_size = ((uint64_t)internal->size_high << 32) | internal->size_low;
     drv->block_size = internal->block_size;
-    drv->size = internal->size;
-    drv->block_count = (internal->block_size + internal->size - 1) / internal->block_size;
+    drv->size = file_size;
+    drv->block_count = (drv->block_size + drv->size - 1) / drv->block_size;
     drv->blocks = calloc(sizeof(struct block_info), drv->block_count);
 
     info->data = drv;
@@ -670,8 +668,8 @@ static
     info->state = drive_internal_state;
     info->prefetch = drive_internal_prefetch;
 
-    // Now determine drive geometry
-    info->sectors = internal->size / 512;
+    // Now determine drive geometry.
+    info->sectors = (uint32_t)(drv->size / 512);
     info->sectors_per_cylinder = 63;
     info->heads = 16;
     info->cylinders_per_head = info->sectors / (info->sectors_per_cylinder * info->heads);
@@ -722,10 +720,18 @@ int drive_init(struct drive_info* info, char* filename)
         return -1;
     int size = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
-    void* data = malloc(size);
+    void* data = malloc(size == 8 ? 12 : size);
     if (read(fd, data, size) != size)
         return -1;
     close(fd);
+
+    // Normalize legacy 8-byte info.dat to 12-byte canonical form.
+    if (size == 8) {
+        uint32_t lo = ((uint32_t*)data)[0], blksz = ((uint32_t*)data)[1];
+        ((uint32_t*)data)[0] = lo;
+        ((uint32_t*)data)[1] = 0;
+        ((uint32_t*)data)[2] = blksz;
+    }
 
     drive_internal_init(info, filename, data, -1);
     free(data);

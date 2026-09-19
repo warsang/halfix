@@ -27,7 +27,7 @@ void qmalloc_init(void)
 {
     if (qmalloc_slabs == NULL) {
         qmalloc_slabs_size = 1;
-        qmalloc_slabs = malloc(1);
+        qmalloc_slabs = malloc(sizeof(void*));
         qmalloc_slabs_resize();
     }
     qmalloc_data = malloc(QMALLOC_SIZE);
@@ -131,8 +131,12 @@ void add_now(itick_t a)
 void util_debug(void)
 {
     display_release_mouse();
-#ifndef EMSCRIPTEN
+#if !defined(EMSCRIPTEN) && !defined(EMSCRIPTEN_BUILD)
+#if defined(__i386__) || defined(__x86_64__)
     __asm__("int3");
+#else
+    __builtin_trap();
+#endif
 #else
     printf("Breakpoint reached -- aborting\n");
     abort();

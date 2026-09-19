@@ -140,7 +140,7 @@ static void bios_writeb(uint32_t port, uint32_t data)
         }
         break;
     case 0x8900: {
-        static const unsigned char shutdown[8] = "Shutdown";
+        static const unsigned char shutdown[9] = "Shutdown";
         static int idx = 0;
         if (data == shutdown[idx++]) {
             if (idx == 8) {
