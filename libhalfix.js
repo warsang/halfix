@@ -29,6 +29,10 @@
 
     var _cache = [];
 
+    // Fallback for catch block that expects $("error") helper (original index.html provided it)
+    function $(id) { try { return document.getElementById(id); } catch (_) { return null; } }
+    if (typeof window !== "undefined" && !window.$) window.$ = $;
+
     /**
      * @param {string} name
      * @returns {string|null} Value of the parameter or null
@@ -383,10 +387,10 @@
                 run_again(me, x);
             }, x);
         } catch (e) {
-            $("error").innerHTML = "Exception thrown -- see JavaScript console";
-            $("messages").innerHTML = e.toString() + "<br />" + e.stack;
+            try { var _el1 = $("error"); if (_el1) _el1.innerHTML = "Exception thrown -- see JavaScript console"; } catch (_) {}
+            try { var _el2 = $("messages"); if (_el2) _el2.innerHTML = e.toString() + "<br />" + e.stack; } catch (_) {}
             failed = true;
-            console.log(e);
+            console.error("[halfix] run loop exception:", e);
             throw e;
         }
     };
